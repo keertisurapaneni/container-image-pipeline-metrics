@@ -7,11 +7,9 @@ references:
     Name: container-image-pipeline-metrics
     Service: container-image-pipeline-metrics
     Environment: ${self:custom.stage}
-    Provisioner: sls://github.com/RedVentures/container-image-pipeline-metrics
+    Provisioner: sls://github.com/org1/container-image-pipeline-metrics
     Project: container-image-pipeline-metrics
-    Owner: platform-tools@redventures.com
     DataClassification: India
-    ServiceNowAppID: 'BAPP002203'
     IsProduction: ${self:custom.isProd.${self:custom.stage}}
     ResiliencyTier: bronze
     
@@ -50,8 +48,8 @@ custom:
     dev: 'false'
     prod: 'true'
   account:
-    prod: "089022728777"
-    dev: "146721774157"
+    prod: "12345678901"
+    dev: "12345678902"
   # pipeline_cron:
   #   prod: "cron(0 /0,12 * * ? *)" # Run every 12 hours
   #   dev: "cron(0 /1 * * ? *)" # Run every 24 hours
@@ -62,27 +60,23 @@ custom:
     prod: "container-image-pipeline-metrics-production"
     dev: "container-image-pipeline-metrics-development"
   writer_endpoint:
-    prod: "container-image-pipeline-metrics-production.cluster-cdt6kako8p2u.us-east-1.rds.amazonaws.com"
-    dev: "container-image-pipeline-metrics-development.cluster-cbghuushgxbw.us-east-1.rds.amazonaws.com"
+    prod: "abc.us-east-1.rds.amazonaws.com"
+    dev: "xyz.us-east-1.rds.amazonaws.com"
   vpcConfig:
     prod:
       securityGroupIds:
         # To communicate with Postgres RDS
-        - sg-03512ff8f579a9767
+        - sg-abc
       subnetIds:
-        - subnet-0e88bfafed8bd3bf2
-        - subnet-0571c22c6c358f753
-        - subnet-01d182558822e6af7
-        - subnet-0b0ed070c11610021
+        - subnet-123
+        - subnet-456
     dev:
       securityGroupIds:
         # To communicate with Postgres RDS
-        - sg-031bcbd562a3af8b5
+        - sg-xyz
       subnetIds:
-        - subnet-01d54d34235c874e1
-        - subnet-0e926661bd77ec35a
-        - subnet-0dec2cd325eb3b162
-        - subnet-0d73f54f148f734de
+        - subnet-789
+        - subnet-012
   pythonRequirements:
     pythonBin: python3
     # AWS Lambda Layers
@@ -130,56 +124,38 @@ functions:
     vpc:
       securityGroupIds: ${self:custom.vpcConfig.${self:custom.stage}.securityGroupIds}
       subnetIds: ${self:custom.vpcConfig.${self:custom.stage}.subnetIds}
-    events:
-      - schedule:
-          name: pipeline-${self:custom.stage}
-          enabled: ${self:custom.enableEvent.${self:custom.stage}}
-          rate: cron(0 /6,15 * * ? *) # Run 1am, 10am EST
-          input:
-            run_function: "pipeline_metrics_all"
-          description: "Github search to find all images using pipeline images"
-      - schedule:
-          name: non_pipeline-${self:custom.stage}
-          enabled: ${self:custom.enableEvent.${self:custom.stage}}
-          rate: cron(0 /8,17 * * ? *) # Run 3am, noon EST
-          input:
-            org_list: "LonelyPlanet, bankrate, HigherEducation, CreditCardsCom, Red-Digital"
-            run_function: "non_pipeline_metrics"
-          description: "Github search to find all images not using pipeline images in certain orgs"
-      - schedule:
-          name: non_pipeline_rv1-${self:custom.stage}
-          enabled: ${self:custom.enableEvent.${self:custom.stage}}
-          rate: cron(0 /10,19 * * ? *) # Run 5am, 2pm EST
-          input:
-            org_list: "RedVentures"
-            run_function: "non_pipeline_metrics_rv_1"
-          description: "Github search to find images not using pipeline images in RV org: 1-15 pages"
-      - schedule:
-          name: non_pipeline_rv2-${self:custom.stage}
-          enabled: ${self:custom.enableEvent.${self:custom.stage}}
-          rate: cron(0 /12,21 * * ? *) # Run 7am, 4pm EST
-          input:
-            org_list: "RedVentures"
-            run_function: "non_pipeline_metrics_rv_2"
-          description: "Github search to find images not using pipeline images in RV org: 15-30 pages"
-## Below schedules have been commented out because currently Github API can't search beyond the "first 1000 results" even when we split the search:
-## https://github.community/t/github-api-search-code-limits-to-1000-items-when-using-pagination/162136/2 
-      # - schedule:
-      #     name: non_pipeline_rv3-${self:custom.stage}
-      #     enabled: ${self:custom.enableEvent.${self:custom.stage}}
-      #     rate: cron(0 /2,8 * * ? *) # Run 9pm, 3am EST
-      #     input:
-      #       org_list: "RedVentures"
-      #       run_function: "non_pipeline_metrics_rv_3"
-      #     description: "Github search to find images not using pipeline images in RV org: 30-45 pages"
-      # - schedule:
-      #     name: non_pipeline_rv4-${self:custom.stage}
-      #     enabled: ${self:custom.enableEvent.${self:custom.stage}}
-      #     rate: cron(0 /6,10 * * ? *) # Run 1am, 5am EST
-      #     input:
-      #       org_list: "RedVentures"
-      #       run_function: "non_pipeline_metrics_rv_4"
-      #     description: "Github search to find images not using pipeline images in RV org: 45-60 pages"
+    # events:
+    #   - schedule:
+    #       name: pipeline-${self:custom.stage}
+    #       enabled: ${self:custom.enableEvent.${self:custom.stage}}
+    #       rate: cron(0 /6,15 * * ? *) # Run 1am, 10am EST
+    #       input:
+    #         run_function: "pipeline_metrics_all"
+    #       description: "Github search to find all images using pipeline images"
+    #   - schedule:
+    #       name: non_pipeline-${self:custom.stage}
+    #       enabled: ${self:custom.enableEvent.${self:custom.stage}}
+    #       rate: cron(0 /8,17 * * ? *) # Run 3am, noon EST
+    #       input:
+    #         org_list: "org2, org3, org4, org5, org6"
+    #         run_function: "non_pipeline_metrics"
+    #       description: "Github search to find all images not using pipeline images in certain orgs"
+    #   - schedule:
+    #       name: non_pipeline_rv1-${self:custom.stage}
+    #       enabled: ${self:custom.enableEvent.${self:custom.stage}}
+    #       rate: cron(0 /10,19 * * ? *) # Run 5am, 2pm EST
+    #       input:
+    #         org_list: "org1"
+    #         run_function: "non_pipeline_metrics_rv_1"
+    #       description: "Github search to find images not using pipeline images in RV org: 1-15 pages"
+    #   - schedule:
+    #       name: non_pipeline_rv2-${self:custom.stage}
+    #       enabled: ${self:custom.enableEvent.${self:custom.stage}}
+    #       rate: cron(0 /12,21 * * ? *) # Run 7am, 4pm EST
+    #       input:
+    #         org_list: "org1"
+    #         run_function: "non_pipeline_metrics_rv_2"
+    #       description: "Github search to find images not using pipeline images in RV org: 15-30 pages"
 
 # Global package to create the lambda zip
 package:
@@ -205,7 +181,7 @@ resources:
       Condition: CreateProdResources
       Type: AWS::SNS::Subscription
       Properties:
-        Endpoint: ksrisurapaneni@redventures.com
+        Endpoint: ksrisurapaneni@org1.com
         Protocol: email
         TopicArn: !Ref ContainerPipelineMetricsAlerts
     

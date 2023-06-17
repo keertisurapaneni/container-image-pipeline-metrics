@@ -1,0 +1,5 @@
+boto3==1.18.4
+prettytable==2.1.0
+PyGithub==1.55
+psycopg2-binary
+regex==2021.9.24

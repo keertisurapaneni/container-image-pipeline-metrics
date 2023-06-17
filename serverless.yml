@@ -1,0 +1,228 @@
+# https://github.com/qtangs/sample-aws-lambda-layer/blob/master/serverless.yaml
+
+
+# reusable pieces of yaml configuration
+references:
+  tags: &tags
+    Name: container-image-pipeline-metrics
+    Service: container-image-pipeline-metrics
+    Environment: ${self:custom.stage}
+    Provisioner: sls://github.com/RedVentures/container-image-pipeline-metrics
+    Project: container-image-pipeline-metrics
+    Owner: platform-tools@redventures.com
+    DataClassification: India
+    ServiceNowAppID: 'BAPP002203'
+    IsProduction: ${self:custom.isProd.${self:custom.stage}}
+    ResiliencyTier: bronze
+    
+
+service: container-image-pipeline-metrics
+frameworkVersion: '2'
+
+provider:
+  name: aws
+  runtime: python3.8
+  region: us-east-1
+  stage: dev
+  tags: *tags
+  deploymentBucket:
+    tags: *tags # add tags to deployment bucket
+  stackTags: *tags # Optional CF stack tags
+  logRetentionInDays: 14 # Set the default RetentionInDays for a CloudWatch LogGroup
+  memorySize: 512 # optional, in MB, default is 1024
+  timeout: 900
+  # environment variables to apply to all lambda functions
+  environment:
+    environment: ${self:custom.stage}
+
+plugins:
+  - serverless-iam-roles-per-function
+  # https://www.serverless.com/blog/serverless-python-packaging
+  - serverless-python-requirements
+
+
+custom:
+  stage: ${opt:stage, self:provider.stage}
+  enableEvent:
+    prod: true
+    dev: false
+  isProd:
+    dev: 'false'
+    prod: 'true'
+  account:
+    prod: "089022728777"
+    dev: "146721774157"
+  # pipeline_cron:
+  #   prod: "cron(0 /0,12 * * ? *)" # Run every 12 hours
+  #   dev: "cron(0 /1 * * ? *)" # Run every 24 hours
+  # non_pipeline_cron:
+  #   prod: "cron(0 /2,14 * * ? *)" # Run every 12 hours
+  #   dev: "cron(0 /3 * * ? *)" # Run every 24 hours
+  service_name:
+    prod: "container-image-pipeline-metrics-production"
+    dev: "container-image-pipeline-metrics-development"
+  writer_endpoint:
+    prod: "container-image-pipeline-metrics-production.cluster-cdt6kako8p2u.us-east-1.rds.amazonaws.com"
+    dev: "container-image-pipeline-metrics-development.cluster-cbghuushgxbw.us-east-1.rds.amazonaws.com"
+  vpcConfig:
+    prod:
+      securityGroupIds:
+        # To communicate with Postgres RDS
+        - sg-03512ff8f579a9767
+      subnetIds:
+        - subnet-0e88bfafed8bd3bf2
+        - subnet-0571c22c6c358f753
+        - subnet-01d182558822e6af7
+        - subnet-0b0ed070c11610021
+    dev:
+      securityGroupIds:
+        # To communicate with Postgres RDS
+        - sg-031bcbd562a3af8b5
+      subnetIds:
+        - subnet-01d54d34235c874e1
+        - subnet-0e926661bd77ec35a
+        - subnet-0dec2cd325eb3b162
+        - subnet-0d73f54f148f734de
+  pythonRequirements:
+    pythonBin: python3
+    # AWS Lambda Layers
+    layer:
+      pythonEtl:
+        name: ${self:service}
+        description: Lambda dependencies for Python
+        compatibleRuntimes:
+          - python3.6
+          - python3.7
+          - python3.8
+          - python3.9
+
+
+# AWS lambda function
+functions:
+  main: # Mention the function name here # This results in function name: ${self:service}-${self:provider.stage}-function_name
+    handler: lambda_function.main # file_name.function_name
+    onError: !Ref ContainerPipelineMetricsAlerts
+    # role: lambdaBasic
+    # iamRoleStatements are meant to be provided at provider level, but to provide it at function level can use the plugin serverless-iam-roles-per-function
+    # https://www.orangejellyfish.com/blog/serverless-and-the-principle-of-least-privilege/
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - ssm:GetParameter
+          - ssm:GetParametersByPath
+          - ssm:DescribeParameters
+        Resource:
+          - "arn:aws:ssm:us-east-1:${self:custom.account.${self:custom.stage}}:parameter/database/${self:custom.service_name.${self:custom.stage}}/*"
+          - "arn:aws:ssm:us-east-1:${self:custom.account.${self:custom.stage}}:parameter/container-image-pipeline-metrics/*"
+    environment:
+      db_table: "metrics"
+      db_endpoint: ${self:custom.writer_endpoint.${self:custom.stage}}
+      db_name: "postgres"
+      db_user: "container_i_root"
+      db_pass: "/database/${self:custom.service_name.${self:custom.stage}}/db_pass"
+      db_port: "5432"
+      github_token: "/container-image-pipeline-metrics/github_token"
+      sns_topic: !Ref ContainerPipelineMetricsAlerts
+      # Variables needed for non_pipeline_metrics function
+      image_lang_list: "alpine, dotnet, golang, java, jdk, jre, node, php, python" # Terms we are looking for to find images that could move to using pipeline images
+    layers:
+      - {Ref: PythonRequirementsLambdaLayer}
+    vpc:
+      securityGroupIds: ${self:custom.vpcConfig.${self:custom.stage}.securityGroupIds}
+      subnetIds: ${self:custom.vpcConfig.${self:custom.stage}.subnetIds}
+    events:
+      - schedule:
+          name: pipeline-${self:custom.stage}
+          enabled: ${self:custom.enableEvent.${self:custom.stage}}
+          rate: cron(0 /6,15 * * ? *) # Run 1am, 10am EST
+          input:
+            run_function: "pipeline_metrics_all"
+          description: "Github search to find all images using pipeline images"
+      - schedule:
+          name: non_pipeline-${self:custom.stage}
+          enabled: ${self:custom.enableEvent.${self:custom.stage}}
+          rate: cron(0 /8,17 * * ? *) # Run 3am, noon EST
+          input:
+            org_list: "LonelyPlanet, bankrate, HigherEducation, CreditCardsCom, Red-Digital"
+            run_function: "non_pipeline_metrics"
+          description: "Github search to find all images not using pipeline images in certain orgs"
+      - schedule:
+          name: non_pipeline_rv1-${self:custom.stage}
+          enabled: ${self:custom.enableEvent.${self:custom.stage}}
+          rate: cron(0 /10,19 * * ? *) # Run 5am, 2pm EST
+          input:
+            org_list: "RedVentures"
+            run_function: "non_pipeline_metrics_rv_1"
+          description: "Github search to find images not using pipeline images in RV org: 1-15 pages"
+      - schedule:
+          name: non_pipeline_rv2-${self:custom.stage}
+          enabled: ${self:custom.enableEvent.${self:custom.stage}}
+          rate: cron(0 /12,21 * * ? *) # Run 7am, 4pm EST
+          input:
+            org_list: "RedVentures"
+            run_function: "non_pipeline_metrics_rv_2"
+          description: "Github search to find images not using pipeline images in RV org: 15-30 pages"
+## Below schedules have been commented out because currently Github API can't search beyond the "first 1000 results" even when we split the search:
+## https://github.community/t/github-api-search-code-limits-to-1000-items-when-using-pagination/162136/2 
+      # - schedule:
+      #     name: non_pipeline_rv3-${self:custom.stage}
+      #     enabled: ${self:custom.enableEvent.${self:custom.stage}}
+      #     rate: cron(0 /2,8 * * ? *) # Run 9pm, 3am EST
+      #     input:
+      #       org_list: "RedVentures"
+      #       run_function: "non_pipeline_metrics_rv_3"
+      #     description: "Github search to find images not using pipeline images in RV org: 30-45 pages"
+      # - schedule:
+      #     name: non_pipeline_rv4-${self:custom.stage}
+      #     enabled: ${self:custom.enableEvent.${self:custom.stage}}
+      #     rate: cron(0 /6,10 * * ? *) # Run 1am, 5am EST
+      #     input:
+      #       org_list: "RedVentures"
+      #       run_function: "non_pipeline_metrics_rv_4"
+      #     description: "Github search to find images not using pipeline images in RV org: 45-60 pages"
+
+# Global package to create the lambda zip
+package:
+  individually: false
+  include:
+    - '!./**'
+    - '*.py'
+  exclude:
+    - '**'
+
+# Custom configuration of all resources including Lambda Function, IAM Role, S3 Bucket, ...
+resources:
+  Conditions:
+    CreateProdResources: !Equals [ "${self:custom.stage}", prod ]
+  Resources:
+    ContainerPipelineMetricsAlerts:
+      Type: AWS::SNS::Topic
+      Properties:
+        DisplayName: "${self:service}-alerts-${self:custom.stage}"
+        TopicName: "${self:service}-alerts-${self:custom.stage}"
+
+    EmailSubscription:
+      Condition: CreateProdResources
+      Type: AWS::SNS::Subscription
+      Properties:
+        Endpoint: ksrisurapaneni@redventures.com
+        Protocol: email
+        TopicArn: !Ref ContainerPipelineMetricsAlerts
+    
+    alertingPolicy:
+      Condition: CreateProdResources
+      Type: AWS::SNS::TopicPolicy
+      Properties:
+        PolicyDocument:
+          Id: Allow_Publish_Alarms
+          Statement:
+            - Action:
+                - "sns:Publish"
+              Effect: Allow
+              Principal:
+                Service:
+                  - "cloudwatch.amazonaws.com"
+              Resource:
+                Ref: ContainerPipelineMetricsAlerts
+        Topics:
+          - Ref: ContainerPipelineMetricsAlerts

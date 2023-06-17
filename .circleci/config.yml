@@ -1,0 +1,137 @@
+version: 2.1
+
+executors:
+  base-executor:
+    docker:
+      # - image: circleci/node:12
+      - image: cimg/python:3.8-node
+
+references:
+  pr_filter: &pr_filter
+    filters:
+      branches:
+        ignore: main
+  nonprod_filter: &nonprod_filter
+    filters:
+      branches:
+        only: main
+  prod_filter: &prod_filter
+    filters:
+      branches:
+        ignore: /.*/
+      tags:
+        only: /^v.*/
+
+jobs:
+  npm-dependencies:
+    executor: base-executor
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package.json" }}
+      - run:
+          name: Install node dependencies
+          command: |
+            npm install
+      - save_cache:
+          key: dependency-cache-{{ checksum "package.json" }}
+          paths:
+            - node_modules
+      # Persist the specified paths (workspace/echo-output) into the workspace for use in downstream job.
+      - persist_to_workspace:
+          # Must be an absolute path, or relative path from working_directory. This is a directory in the container which is
+          # taken to be the root directory of the workspace.
+          root: .
+          # Must be relative path from root
+          paths:
+            - node_modules
+
+       
+  serverless-lint: # serverless-lint will run a sls print and "lint" the serverless file
+    executor: base-executor
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Serverless and AWS CLI
+          command: |
+            sudo npm i -g serverless@2.8.0
+            sudo apt-get install awscli
+      - run:
+          name: Serverless Print
+          command: |
+            aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID_DEVELOPMENT --profile default
+            aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY_DEVELOPMENT --profile default
+            aws configure set region us-east-1 --profile default
+            serverless --version
+            serverless print --stage dev
+  # deploy-code runs a serverless deploy to rv-anvil-nonprod or rv-anvil-prod based on the stage.name parameter
+  deploy-code:
+    executor: base-executor
+    resource_class: large
+    working_directory: ~/repo
+    parameters:
+      stage_name:
+        type: string
+        default: "dev"
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Serverless and AWS CLI
+          command: |
+            sudo npm i -g serverless@2.8.0
+            sudo apt-get update
+            sudo apt-get install awscli
+      - run:
+          name: Serverless Deploy
+          command: |
+            serverless --version
+            if [ "<< parameters.stage_name >>" = "prod" ]; then
+              aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID_PRODUCTION --profile default
+              aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY_PRODUCTION --profile default
+              aws configure set region us-east-1 --profile default
+            else
+              aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID_DEVELOPMENT --profile default
+              aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY_DEVELOPMENT --profile default
+              aws configure set region us-east-1 --profile default
+            fi
+            SLS_DEBUG=* sls deploy --stage << parameters.stage_name >> --verbose
+
+workflows:
+  version: 2
+  pr-check: 
+  # when pipeline parameter "run-workflow" is true, trigger below jobs.
+  #  when: << pipeline.parameters.run-workflow >>
+    jobs:
+      - npm-dependencies:
+          <<: *pr_filter
+      # - serverless-lint:
+      #     <<: *pr_filter
+      #     requires: 
+      #       - npm-dependencies
+  deploy-development:
+  #  when: << pipeline.parameters.run-workflow >>
+    jobs:
+      - npm-dependencies:
+          <<: *nonprod_filter
+      - deploy-code:
+          stage_name: dev
+          <<: *nonprod_filter
+          requires: 
+            - npm-dependencies
+  deploy-production:
+    jobs:
+      - npm-dependencies:
+          <<: *prod_filter
+      - deploy-code:
+          stage_name: prod
+          <<: *prod_filter
+          requires: 
+            - npm-dependencies
+
+
